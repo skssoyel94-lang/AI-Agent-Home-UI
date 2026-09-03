@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/mobile/"
+title = "CodePilot AI"
+description = "A mobile-first AI agent workspace for exploring, building, and interacting with intelligent tools on the go."
+version = "1.0.0"
+id = "artifacts/ai-agent-home-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/mobile/" ]
+localPort = 26157
+
+[services.development]
+run = "pnpm --filter @workspace/ai-agent-home-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ai-agent-home-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/ai-agent-home-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "26157"
+BASE_PATH = "/mobile/"

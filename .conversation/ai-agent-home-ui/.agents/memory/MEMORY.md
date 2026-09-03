@@ -1,0 +1,3 @@
+- [Expo auth dependency alignment](expo-auth-dependency-alignment.md) — Imported Expo auth flows should be checked against the installed Expo Router/SDK APIs before runtime.
+- [Firebase OAuth platform split](firebase-oauth-platform-split.md) — Firebase web config supports browser Google auth; native builds additionally need Google OAuth client IDs.
+- [Firebase email verification flow](firebase-email-verification.md) — Firebase email accounts verify through links and reload state; do not mix Clerk code verification with Firebase auth.

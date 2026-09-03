@@ -5,9 +5,6 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
 
 export type WorkspaceFileType = typeof WorkspaceFileType[keyof typeof WorkspaceFileType];
 
@@ -16,18 +13,3 @@ export const WorkspaceFileType = {
   file: 'file',
   directory: 'directory',
 } as const;
-
-export interface WorkspaceFile {
-  id: string;
-  name: string;
-  path: string;
-  type: WorkspaceFileType;
-  /** @minimum 0 */
-  size?: number;
-}
-
-export interface WorkspaceFilesResponse {
-  root: string;
-  files: WorkspaceFile[];
-}
-

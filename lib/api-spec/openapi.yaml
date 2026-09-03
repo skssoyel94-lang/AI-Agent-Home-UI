@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: workspace
+    description: Workspace file operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /workspace/files:
+    get:
+      operationId: listWorkspaceFiles
+      tags: [workspace]
+      summary: List workspace files
+      description: Returns the source file tree for the current mobile workspace
+      responses:
+        "200":
+          description: Workspace file tree
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceFilesResponse"
+        "401":
+          description: Authentication required
 components:
   schemas:
     HealthStatus:
@@ -33,4 +50,36 @@ components:
           type: string
       required:
         - status
+    WorkspaceFile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        size:
+          type: number
+          minimum: 0
+      required:
+        - id
+        - name
+        - path
+        - type
+    WorkspaceFilesResponse:
+      type: object
+      properties:
+        root:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceFile"
+      required:
+        - root
+        - files
 

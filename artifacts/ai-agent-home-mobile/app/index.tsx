@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@clerk/expo';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
 import * as Haptics from 'expo-haptics';
 import { Redirect, type Href } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,6 +20,7 @@ import {
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useListWorkspaceFiles } from '@workspace/api-client-react';
 import { useColors } from '@/hooks/useColors';
 import { useFirebaseAuth } from '@/components/FirebaseAuthProvider';
 
@@ -26,6 +28,14 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachment?: ChatAttachment;
+};
+
+type ChatAttachment = {
+  name: string;
+  uri: string;
+  mimeType?: string;
+  size?: number;
 };
 
 type Model = {
@@ -41,8 +51,15 @@ type WorkspaceTool = {
   description: string;
 };
 
+type WorkspaceFile = {
+  id: string;
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+};
+
 const models: Model[] = [
-  { id: 'premium', name: 'Premium', detail: 'Advanced reasoning' },
   { id: 'groq', name: 'Groq', detail: 'Llama 3 / Mixtral' },
   { id: 'gemini', name: 'Gemini', detail: 'Google AI' },
   { id: 'ollama', name: 'Ollama', detail: 'Local models' },
@@ -80,10 +97,41 @@ const workspaceTools: WorkspaceTool[] = [
     detail: 'Sync',
     description: 'Send workspace changes back to a connected GitHub repository.',
   },
+  {
+    icon: 'terminal',
+    label: 'Terminal',
+    detail: 'Commands',
+    description: 'Run workspace commands and inspect their output.',
+  },
+  {
+    icon: 'monitor',
+    label: 'Live preview',
+    detail: 'Running',
+    description: 'Open the running preview of the app you are building.',
+  },
 ];
 
 function makeId(): string {
   return `${Date.now().toString()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function attachmentIcon(attachment: ChatAttachment): React.ComponentProps<typeof Feather>['name'] {
+  const name = attachment.name.toLowerCase();
+  if (attachment.mimeType?.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) {
+    return 'image';
+  }
+  if (attachment.mimeType?.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/.test(name)) {
+    return 'video';
+  }
+  if (/\.(zip|rar|7z|tar|gz)$/.test(name)) return 'archive';
+  return 'file';
+}
+
+function formatFileSize(size?: number): string {
+  if (size === undefined) return 'File';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function IconButton({
@@ -136,6 +184,25 @@ function MessageBubble({
             : { backgroundColor: colors.card },
         ]}
       >
+        {message.attachment && (
+          <View style={[styles.attachmentCard, { backgroundColor: colors.background }]}>
+            <View style={[styles.attachmentIcon, { backgroundColor: colors.secondary }]}>
+              <Feather
+                name={attachmentIcon(message.attachment)}
+                size={16}
+                color={colors.primary}
+              />
+            </View>
+            <View style={styles.attachmentCopy}>
+              <Text style={[styles.attachmentName, { color: colors.foreground }]} numberOfLines={1}>
+                {message.attachment.name}
+              </Text>
+              <Text style={[styles.attachmentSize, { color: colors.mutedForeground }]}>
+                {formatFileSize(message.attachment.size)}
+              </Text>
+            </View>
+          </View>
+        )}
         <Text style={[styles.messageText, { color: colors.foreground }]}>
           {message.content}
         </Text>
@@ -169,6 +236,11 @@ function Sheet({
   onTasks,
   onMemory,
   onTool,
+  files,
+  filesLoading,
+  filesError,
+  onRetryFiles,
+  onFile,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -177,6 +249,11 @@ function Sheet({
   onTasks: () => void;
   onMemory: () => void;
   onTool: (tool: WorkspaceTool) => void;
+  files: WorkspaceFile[];
+  filesLoading: boolean;
+  filesError: boolean;
+  onRetryFiles: () => void;
+  onFile: (file: WorkspaceFile) => void;
 }) {
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -233,10 +310,42 @@ function Sheet({
               <Text style={[styles.toolLabel, { color: colors.foreground }]}>Task manager</Text>
               <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
             </Pressable>
-            <Text style={[styles.sheetSectionLabel, { color: colors.mutedForeground }]}>FILES</Text>
-            <FileRow label="src" folder colors={colors} />
-            <FileRow label="package.json" colors={colors} />
-            <FileRow label="README.md" colors={colors} />
+            <View style={styles.filesHeader}>
+              <Text style={[styles.sheetSectionLabel, { color: colors.mutedForeground }]}>FILES</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Refresh workspace files"
+                onPress={onRetryFiles}
+                hitSlop={8}
+                style={({ pressed }) => [styles.refreshFilesButton, pressed && styles.pressed]}
+              >
+                <Feather name="refresh-cw" size={14} color={colors.mutedForeground} />
+              </Pressable>
+            </View>
+            {filesLoading ? (
+              <Text style={[styles.filesMessage, { color: colors.mutedForeground }]}>
+                Loading workspace files…
+              </Text>
+            ) : filesError ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading workspace files"
+                onPress={onRetryFiles}
+                style={({ pressed }) => [styles.filesMessageButton, pressed && styles.pressed]}
+              >
+                <Text style={[styles.filesMessage, { color: colors.primary }]}>
+                  Couldn&apos;t load files. Tap to retry.
+                </Text>
+              </Pressable>
+            ) : files.length > 0 ? (
+              files.map((file) => (
+                <FileRow key={file.id} file={file} colors={colors} onPress={() => onFile(file)} />
+              ))
+            ) : (
+              <Text style={[styles.filesMessage, { color: colors.mutedForeground }]}>
+                No workspace files found.
+              </Text>
+            )}
             <View style={styles.sheetFooter}>
               <Pressable onPress={onMemory} style={({ pressed }) => [styles.footerAction, pressed && styles.pressed]}>
                 <Feather name="book-open" size={17} color={colors.mutedForeground} />
@@ -311,19 +420,38 @@ function ToolRow({
 }
 
 function FileRow({
-  label,
-  folder,
+  file,
   colors,
+  onPress,
 }: {
-  label: string;
-  folder?: boolean;
+  file: WorkspaceFile;
   colors: ReturnType<typeof useColors>;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.fileRow}>
-      <Feather name={folder ? 'folder' : 'file-text'} size={16} color={folder ? colors.primary : colors.mutedForeground} />
-      <Text style={[styles.fileLabel, { color: colors.foreground }]}>{label}</Text>
-    </View>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${file.path}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.fileRow, pressed && styles.pressed]}
+    >
+      <Feather
+        name={file.type === 'directory' ? 'folder' : 'file-text'}
+        size={16}
+        color={file.type === 'directory' ? colors.primary : colors.mutedForeground}
+      />
+      <View style={styles.fileCopy}>
+        <Text style={[styles.fileLabel, { color: colors.foreground }]} numberOfLines={1}>
+          {file.name}
+        </Text>
+        {file.path !== file.name && (
+          <Text style={[styles.filePath, { color: colors.mutedForeground }]} numberOfLines={1}>
+            {file.path}
+          </Text>
+        )}
+      </View>
+      <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+    </Pressable>
   );
 }
 
@@ -595,10 +723,95 @@ function ToolModal({
   );
 }
 
+function FileModal({
+  visible,
+  file,
+  root,
+  onClose,
+  colors,
+}: {
+  visible: boolean;
+  file: WorkspaceFile | null;
+  root: string;
+  onClose: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  if (!file) return null;
+
+  const isDirectory = file.type === 'directory';
+  const sizeLabel =
+    file.size === undefined
+      ? isDirectory
+        ? 'Folder'
+        : 'Unknown size'
+      : file.size < 1024
+        ? `${file.size} B`
+        : file.size < 1024 * 1024
+          ? `${(file.size / 1024).toFixed(1)} KB`
+          : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.dialogHeader}>
+            <View style={styles.toolDialogHeading}>
+              <View style={[styles.toolDialogIcon, { backgroundColor: colors.secondary }]}>
+                <Feather
+                  name={isDirectory ? 'folder' : 'file-text'}
+                  size={19}
+                  color={colors.primary}
+                />
+              </View>
+              <View style={styles.toolDialogCopy}>
+                <Text style={[styles.dialogTitle, { color: colors.foreground }]} numberOfLines={1}>
+                  {file.name}
+                </Text>
+                <Text style={[styles.dialogSubtitle, { color: colors.mutedForeground }]}>
+                  {isDirectory ? 'Directory' : 'Source file'}
+                </Text>
+              </View>
+            </View>
+            <Pressable onPress={onClose} hitSlop={12} accessibilityLabel="Close file details">
+              <Feather name="x" size={20} color={colors.mutedForeground} />
+            </Pressable>
+          </View>
+          <View style={[styles.fileDetail, { borderColor: colors.border }]}>
+            <Text style={[styles.fileDetailLabel, { color: colors.mutedForeground }]}>PATH</Text>
+            <Text style={[styles.fileDetailValue, { color: colors.foreground }]}>{root}/{file.path}</Text>
+          </View>
+          <View style={[styles.fileDetail, { borderColor: colors.border }]}>
+            <Text style={[styles.fileDetailLabel, { color: colors.mutedForeground }]}>SIZE</Text>
+            <Text style={[styles.fileDetailValue, { color: colors.foreground }]}>{sizeLabel}</Text>
+          </View>
+          <Pressable
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.dialogButton,
+              { backgroundColor: colors.primary },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.dialogButtonText, { color: colors.primaryForeground }]}>
+              Close
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<Message>>(null);
+  const {
+    data: workspaceFilesData,
+    isLoading: filesLoading,
+    isError: filesError,
+    refetch: refetchFiles,
+  } = useListWorkspaceFiles();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -609,8 +822,12 @@ function HomeScreen() {
   const [tasksVisible, setTasksVisible] = useState(false);
   const [memoryVisible, setMemoryVisible] = useState(false);
   const [activeTool, setActiveTool] = useState<WorkspaceTool | null>(null);
+  const [activeFile, setActiveFile] = useState<WorkspaceFile | null>(null);
+  const [pendingAttachment, setPendingAttachment] = useState<ChatAttachment | null>(null);
 
   const model = models[modelIndex];
+  const workspaceFiles = workspaceFilesData?.files ?? [];
+  const workspaceRoot = workspaceFilesData?.root ?? 'workspace';
   const topInset = Platform.OS === 'web' ? 67 : insets.top;
   const bottomInset = Platform.OS === 'web' ? 34 : insets.bottom;
   const hasMessages = messages.length > 0;
@@ -643,15 +860,44 @@ function HomeScreen() {
     }
   }, [hasMessages, isLoading]);
 
+  const pickAttachment = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets[0]) return;
+
+      const asset = result.assets[0];
+      setPendingAttachment({
+        name: asset.name,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+        size: asset.size,
+      });
+      void Haptics.selectionAsync();
+    } catch {
+      Alert.alert('Attachment failed', 'We could not open the file picker. Please try again.');
+    }
+  };
+
   const sendMessage = (value: string) => {
     const content = value.trim();
-    if (!content || isLoading) return;
+    const attachment = pendingAttachment;
+    if ((!content && !attachment) || isLoading) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Keyboard.dismiss();
     setInput('');
+    setPendingAttachment(null);
     setMessages((current) => [
       ...current,
-      { id: makeId(), role: 'user', content },
+      {
+        id: makeId(),
+        role: 'user',
+        content: content || `Attached ${attachment?.name}`,
+        attachment: attachment ?? undefined,
+      },
     ]);
     setIsLoading(true);
     setTimeout(() => {
@@ -660,8 +906,9 @@ function HomeScreen() {
         {
           id: makeId(),
           role: 'assistant',
-          content:
-            'Great direction. I’ll turn that into a clear build plan, then keep the next step small and shippable.',
+          content: attachment
+            ? `I received ${attachment.name}. I’ll include it in the next build step.`
+            : 'Great direction. I’ll turn that into a clear build plan, then keep the next step small and shippable.',
         },
       ]);
       setIsLoading(false);
@@ -671,6 +918,7 @@ function HomeScreen() {
   const startNewChat = () => {
     setMessages([]);
     setInput('');
+    setPendingAttachment(null);
     setIsLoading(false);
     setSheetVisible(false);
     void Haptics.selectionAsync();
@@ -767,6 +1015,34 @@ function HomeScreen() {
             { paddingBottom: Math.max(bottomInset, 14), backgroundColor: colors.background },
           ]}
         >
+          {pendingAttachment && (
+            <View style={[styles.pendingAttachment, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.attachmentIcon, { backgroundColor: colors.secondary }]}>
+                <Feather
+                  name={attachmentIcon(pendingAttachment)}
+                  size={16}
+                  color={colors.primary}
+                />
+              </View>
+              <View style={styles.attachmentCopy}>
+                <Text style={[styles.attachmentName, { color: colors.foreground }]} numberOfLines={1}>
+                  {pendingAttachment.name}
+                </Text>
+                <Text style={[styles.attachmentSize, { color: colors.mutedForeground }]}>
+                  {formatFileSize(pendingAttachment.size)}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Remove attachment"
+                onPress={() => setPendingAttachment(null)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.removeAttachment, pressed && styles.pressed]}
+              >
+                <Feather name="x" size={17} color={colors.mutedForeground} />
+              </Pressable>
+            </View>
+          )}
           <View
             style={[
               styles.composer,
@@ -775,8 +1051,8 @@ function HomeScreen() {
           >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Attach a file"
-              onPress={() => Alert.alert('Attach', 'File attachments will be available soon.')}
+              accessibilityLabel="Attach a photo, video, ZIP, or document"
+              onPress={() => void pickAttachment()}
               style={({ pressed }) => [styles.composerIcon, pressed && styles.pressed]}
             >
               <Feather name="plus" size={21} color={colors.mutedForeground} />
@@ -793,27 +1069,28 @@ function HomeScreen() {
               blurOnSubmit
               onSubmitEditing={() => sendMessage(input)}
               accessibilityLabel="Message composer"
+               {...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {})}
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={input.trim() ? 'Send message' : 'Use voice input'}
+              accessibilityLabel={input.trim() || pendingAttachment ? 'Send message' : 'Use voice input'}
               onPress={() =>
-                input.trim()
+                input.trim() || pendingAttachment
                   ? sendMessage(input)
                   : Alert.alert('Voice input', 'Voice input is ready to connect to your device.')
               }
               style={({ pressed }) => [
                 styles.sendButton,
                 {
-                  backgroundColor: input.trim() ? colors.primary : colors.secondary,
+                  backgroundColor: input.trim() || pendingAttachment ? colors.primary : colors.secondary,
                 },
                 pressed && styles.pressed,
               ]}
             >
               <Feather
-                name={input.trim() ? 'arrow-up' : 'mic'}
+                name={input.trim() || pendingAttachment ? 'arrow-up' : 'mic'}
                 size={19}
-                color={input.trim() ? colors.primaryForeground : colors.mutedForeground}
+                color={input.trim() || pendingAttachment ? colors.primaryForeground : colors.mutedForeground}
               />
             </Pressable>
           </View>
@@ -837,6 +1114,16 @@ function HomeScreen() {
           setSheetVisible(false);
           setActiveTool(tool);
         }}
+        files={workspaceFiles}
+        filesLoading={filesLoading}
+        filesError={filesError}
+        onRetryFiles={() => {
+          void refetchFiles();
+        }}
+        onFile={(file) => {
+          setSheetVisible(false);
+          setActiveFile(file);
+        }}
       />
       <TasksModal
         visible={tasksVisible}
@@ -852,6 +1139,13 @@ function HomeScreen() {
         visible={activeTool !== null}
         tool={activeTool}
         onClose={() => setActiveTool(null)}
+        colors={colors}
+      />
+      <FileModal
+        visible={activeFile !== null}
+        file={activeFile}
+        root={workspaceRoot}
+        onClose={() => setActiveFile(null)}
         colors={colors}
       />
       <ModelPickerModal
@@ -1061,6 +1355,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  attachmentCard: {
+    minWidth: 180,
+    maxWidth: 260,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    padding: 8,
+    marginBottom: 8,
+  },
+  pendingAttachment: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderRadius: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+  },
+  attachmentIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentCopy: { flex: 1, minWidth: 0 },
+  attachmentName: { fontFamily: 'Inter_500Medium', fontSize: 12 },
+  attachmentSize: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 3 },
+  removeAttachment: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   loadingRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1230,6 +1560,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
   },
+  filesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  refreshFilesButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filesMessageButton: {
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  filesMessage: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
   fileRow: {
     minHeight: 35,
     flexDirection: 'row',
@@ -1237,7 +1588,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     gap: 10,
   },
+  fileCopy: { flex: 1, minWidth: 0 },
   fileLabel: { fontFamily: 'Inter_400Regular', fontSize: 13 },
+  filePath: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 2 },
   sheetFooter: {
     borderTopWidth: 1,
     borderTopColor: '#333538',
@@ -1345,4 +1698,7 @@ const styles = StyleSheet.create({
   memoryItem: { borderBottomWidth: 1, paddingBottom: 13, marginBottom: 14 },
   memoryLabel: { fontFamily: 'Inter_500Medium', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 },
   memoryValue: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, marginTop: 6 },
+  fileDetail: { borderBottomWidth: 1, paddingBottom: 13, marginBottom: 14 },
+  fileDetailLabel: { fontFamily: 'Inter_500Medium', fontSize: 10, letterSpacing: 1 },
+  fileDetailValue: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18, marginTop: 6 },
 });

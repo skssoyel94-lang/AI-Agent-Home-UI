@@ -34,11 +34,52 @@ type Model = {
   detail: string;
 };
 
+type WorkspaceTool = {
+  icon: React.ComponentProps<typeof Feather>['name'];
+  label: string;
+  detail: string;
+  description: string;
+};
+
 const models: Model[] = [
+  { id: 'premium', name: 'Premium', detail: 'Advanced reasoning' },
   { id: 'groq', name: 'Groq', detail: 'Llama 3 / Mixtral' },
   { id: 'gemini', name: 'Gemini', detail: 'Google AI' },
   { id: 'ollama', name: 'Ollama', detail: 'Local models' },
   { id: 'kimi', name: 'Kimi', detail: 'Long context' },
+];
+
+const workspaceTools: WorkspaceTool[] = [
+  {
+    icon: 'package',
+    label: 'Packages',
+    detail: 'Auto',
+    description: 'Manage the packages available to this workspace.',
+  },
+  {
+    icon: 'database',
+    label: 'PostgreSQL',
+    detail: 'Database',
+    description: 'Connect persistent PostgreSQL data to your workspace.',
+  },
+  {
+    icon: 'cloud',
+    label: 'Deploy',
+    detail: 'Publish',
+    description: 'Prepare this workspace to publish when your build is ready.',
+  },
+  {
+    icon: 'github',
+    label: 'Import from GitHub',
+    detail: 'Repository',
+    description: 'Bring a GitHub repository into this workspace.',
+  },
+  {
+    icon: 'github',
+    label: 'GitHub Push',
+    detail: 'Sync',
+    description: 'Send workspace changes back to a connected GitHub repository.',
+  },
 ];
 
 function makeId(): string {
@@ -127,6 +168,7 @@ function Sheet({
   onNewChat,
   onTasks,
   onMemory,
+  onTool,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -134,6 +176,7 @@ function Sheet({
   onNewChat: () => void;
   onTasks: () => void;
   onMemory: () => void;
+  onTool: (tool: WorkspaceTool) => void;
 }) {
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -175,11 +218,16 @@ function Sheet({
             <AgentRow name="Frontend" initials="FE" tint="#34a853" status="Active" active colors={colors} />
             <AgentRow name="Reviewer" initials="RV" tint="#a8c7fa" status="Idle" colors={colors} />
             <Text style={[styles.sheetSectionLabel, { color: colors.mutedForeground }]}>WORKSPACE TOOLS</Text>
-            <ToolRow icon="package" label="Packages" detail="Auto" colors={colors} />
-            <ToolRow icon="database" label="PostgreSQL" colors={colors} />
-            <ToolRow icon="cloud" label="Deploy" colors={colors} />
-            <ToolRow icon="github" label="Import from GitHub" colors={colors} />
-            <ToolRow icon="github" label="GitHub Push" colors={colors} />
+            {workspaceTools.map((tool) => (
+              <ToolRow
+                key={tool.label}
+                icon={tool.icon}
+                label={tool.label}
+                detail={tool.detail}
+                colors={colors}
+                onPress={() => onTool(tool)}
+              />
+            ))}
             <Pressable onPress={onTasks} style={({ pressed }) => [styles.toolRow, pressed && styles.pressed]}>
               <Feather name="check-square" size={18} color={colors.primary} />
               <Text style={[styles.toolLabel, { color: colors.foreground }]}>Task manager</Text>
@@ -239,18 +287,26 @@ function ToolRow({
   label,
   detail,
   colors,
+  onPress,
 }: {
   icon: React.ComponentProps<typeof Feather>['name'];
   label: string;
   detail?: string;
   colors: ReturnType<typeof useColors>;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.toolRow}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${label}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.toolRow, pressed && styles.pressed]}
+    >
       <Feather name={icon} size={18} color={colors.primary} />
       <Text style={[styles.toolLabel, { color: colors.foreground }]}>{label}</Text>
       {detail && <Text style={[styles.toolDetail, { color: colors.mutedForeground, backgroundColor: colors.secondary }]}>{detail}</Text>}
-    </View>
+      <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+    </Pressable>
   );
 }
 
@@ -479,6 +535,66 @@ function MemoryModal({
   );
 }
 
+function ToolModal({
+  visible,
+  tool,
+  onClose,
+  colors,
+}: {
+  visible: boolean;
+  tool: WorkspaceTool | null;
+  onClose: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  if (!tool) return null;
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.dialog, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.dialogHeader}>
+            <View style={styles.toolDialogHeading}>
+              <View style={[styles.toolDialogIcon, { backgroundColor: colors.secondary }]}>
+                <Feather name={tool.icon} size={19} color={colors.primary} />
+              </View>
+              <View style={styles.toolDialogCopy}>
+                <Text style={[styles.dialogTitle, { color: colors.foreground }]}>{tool.label}</Text>
+                <Text style={[styles.dialogSubtitle, { color: colors.mutedForeground }]}>
+                  {tool.detail}
+                </Text>
+              </View>
+            </View>
+            <Pressable onPress={onClose} hitSlop={12} accessibilityLabel="Close tool">
+              <Feather name="x" size={20} color={colors.mutedForeground} />
+            </Pressable>
+          </View>
+          <Text style={[styles.toolDialogDescription, { color: colors.mutedForeground }]}>
+            {tool.description}
+          </Text>
+          <View style={[styles.toolStatus, { backgroundColor: colors.secondary }]}>
+            <View style={[styles.toolStatusDot, { backgroundColor: colors.primary }]} />
+            <Text style={[styles.toolStatusText, { color: colors.foreground }]}>
+              Workspace tool opened
+            </Text>
+          </View>
+          <Pressable
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.dialogButton,
+              { backgroundColor: colors.primary },
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.dialogButtonText, { color: colors.primaryForeground }]}>
+              Done
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -492,6 +608,7 @@ function HomeScreen() {
   const [sheetVisible, setSheetVisible] = useState(false);
   const [tasksVisible, setTasksVisible] = useState(false);
   const [memoryVisible, setMemoryVisible] = useState(false);
+  const [activeTool, setActiveTool] = useState<WorkspaceTool | null>(null);
 
   const model = models[modelIndex];
   const topInset = Platform.OS === 'web' ? 67 : insets.top;
@@ -716,6 +833,10 @@ function HomeScreen() {
           setSheetVisible(false);
           setMemoryVisible(true);
         }}
+        onTool={(tool) => {
+          setSheetVisible(false);
+          setActiveTool(tool);
+        }}
       />
       <TasksModal
         visible={tasksVisible}
@@ -725,6 +846,12 @@ function HomeScreen() {
       <MemoryModal
         visible={memoryVisible}
         onClose={() => setMemoryVisible(false)}
+        colors={colors}
+      />
+      <ToolModal
+        visible={activeTool !== null}
+        tool={activeTool}
+        onClose={() => setActiveTool(null)}
         colors={colors}
       />
       <ModelPickerModal
@@ -1177,8 +1304,29 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 18,
   },
+  toolDialogHeading: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 },
+  toolDialogIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toolDialogCopy: { flex: 1 },
   dialogTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 20 },
   dialogSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12, marginTop: 4 },
+  toolDialogDescription: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19 },
+  toolStatus: {
+    minHeight: 42,
+    borderRadius: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    marginTop: 18,
+  },
+  toolStatusDot: { width: 7, height: 7, borderRadius: 4 },
+  toolStatusText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   taskCard: { borderRadius: 15, padding: 14 },
   taskRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   taskTitle: { fontFamily: 'Inter_500Medium', fontSize: 13, flex: 1 },
